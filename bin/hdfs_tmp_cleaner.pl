@@ -6,6 +6,7 @@
 #        USAGE:  ./hdfs_tmp_cleaner.pl
 #           --rm-batch  - disable interactive prompting
 #           --keep-days - number of days to keep in /tmp
+#           --hdfs-path - the hdfs url to your namenode.
 #
 #  DESCRIPTION:
 #
@@ -36,9 +37,11 @@ my $opt_keep_days = 2;
 GetOptions(
     'rm-batch' => \$opt_rm_batch,
     'keep-days=i' => \$opt_keep_days,
+    'hdfs-path=s' => \$opt_hdfs_path,
     'help' => sub { print "$0
         --rm-batch  = delete stuff without prompting for cofnirmation
         --keep-days = number of days back to keep (default: $opt_keep_days)
+        --hdfs-path = the hdfs url to your namenode.
         --help      = see --help for more information\n\n";
         exit;
 
