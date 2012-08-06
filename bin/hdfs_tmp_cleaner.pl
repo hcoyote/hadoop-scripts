@@ -11,8 +11,8 @@
 # REQUIREMENTS:  ---
 #         BUGS:  ---
 #        NOTES:  ---
-#       AUTHOR:  Travis Campbell (), <tcampbell@indeed.com>
-#      COMPANY:  Indeed, Inc.
+#       AUTHOR:  Travis Campbell (), <hcoyote@ghostar.org>
+#      COMPANY:
 #      VERSION:  1.0
 #      CREATED:  05/14/12 17:16:57 CDT
 #     REVISION:  ---
