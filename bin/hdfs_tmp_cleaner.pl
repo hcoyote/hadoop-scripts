@@ -4,9 +4,6 @@
 #         FILE:  hdfs_tmp_cleaner.pl
 #
 #        USAGE:  ./hdfs_tmp_cleaner.pl
-#           --rm-batch  - disable interactive prompting
-#           --keep-days - number of days to keep in /tmp
-#           --hdfs-path - the hdfs url to your namenode.
 #
 #  DESCRIPTION:
 #
@@ -14,8 +11,8 @@
 # REQUIREMENTS:  ---
 #         BUGS:  ---
 #        NOTES:  ---
-#       AUTHOR:  Travis Campbell (), <hcoyote@ghostar.org>
-#      COMPANY:
+#       AUTHOR:  Travis Campbell (), <tcampbell@indeed.com>
+#      COMPANY:  Indeed, Inc.
 #      VERSION:  1.0
 #      CREATED:  05/14/12 17:16:57 CDT
 #     REVISION:  ---
@@ -33,21 +30,33 @@ use Getopt::Long;
 my $opt_rm_batch;
 my $opt_hdfs_path =  "hdfs://localhost:9000";
 my $opt_keep_days = 2;
+my $opt_skiptrash;
+my $path = "/tmp";
+
+my @whitelist = (
+    qr/hadoop-mapred/
+);
 
 GetOptions(
     'rm-batch' => \$opt_rm_batch,
     'keep-days=i' => \$opt_keep_days,
-    'hdfs-path=s' => \$opt_hdfs_path,
+    'skip-trash'  => \$opt_skiptrash,
+    'path=s' => \$path,
     'help' => sub { print "$0
         --rm-batch  = delete stuff without prompting for cofnirmation
         --keep-days = number of days back to keep (default: $opt_keep_days)
-        --hdfs-path = the hdfs url to your namenode.
         --help      = see --help for more information\n\n";
         exit;
 
         },
 
 );
+
+if ($path ne "/tmp") {
+    warn "Disabling batch processing because we're not in /tmp";
+    undef $opt_rm_batch
+
+}
 
 
 # don't change the number of seconds in a day until proven that earth has slowed down
@@ -56,13 +65,15 @@ my $DAYS_IN_SECONDS = 86400;
 my $KEEP_DAYS = $opt_keep_days;
 
 # Things we need to work in HDFS; let's also limit the deletions to /tmp for now.
-my $path = "/tmp";
 my $hadoop_cmd = "/usr/bin/hadoop";
 my $hadoop_ls  = "$hadoop_cmd fs -ls ";
 my $hadoop_rmr = "$hadoop_cmd fs -rmr ";
 my $hadoop_du  = "$hadoop_cmd fs -du ";
 my $hadoop_dus = "$hadoop_cmd fs -du -s ";
 
+if (defined $opt_skiptrash) {
+    $hadoop_rmr .= " -skipTrash ";
+}
 
 my $total_size = 0;
 my $total_delete_size = 0;
@@ -99,6 +110,12 @@ while (<$fh>) {
 
     my ($mode, $replicas, $user, $group, $filesize, $mod_date, $mod_time, $path) = split(/\s+/);
 
+    if (map { $path =~ m/$_/ } @whitelist) {
+        print "Skipped setting of deletion on $path because it matches whitelist\n";
+        delete $hdfs_path_info{$path};
+        next;
+    }
+
     # give us seconds from epoch
     my $file_time = parsedate("$mod_date $mod_time");
 
@@ -134,9 +151,11 @@ while (<$fh>) {
 print "TOTAL DELETE CANDIDATES = " . $total_delete_size / (1024 * 1024 * 1024 ) . " gigabytes\n";
 print "TOTAL SIZE              = " . $total_size / (1024 * 1024 * 1024) . "gigabytes\n";
 
+print "Using $hadoop_rmr to delete\n";
 # let's actually work on deleting things.
 foreach my $path (sort keys %hdfs_path_info) {
     if (exists $hdfs_path_info{$path}{deleteme} and $hdfs_path_info{$path}{deleteme} == 1) {
+
 
         # Go interactive unless we're deleting in batch mode.
         if (not defined $opt_rm_batch) {
