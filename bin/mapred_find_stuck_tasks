@@ -1,0 +1,123 @@
+#!/bin/bash
+#
+# This script attempts to find stuck MRv1 jobs running in an HA
+# Hadoop cluster using job recovery, looking for jobs with tasks throwing 
+# "Error launching task" errors.
+#
+# Details on this issue can be found at https://issues.cloudera.org/browse/DISTRO-485
+#
+# This script should not be needed if you're running at least
+#
+#  CDH 4.7
+#  CDH 5.0.1
+#  CDH 5.1.0
+
+# Determine if we're kerberos enabled and attempt to find a working
+# ticket before we start using hadoop commands, otherwise this just
+# causes timeouts.
+
+if [[ -f /etc/krb5.conf ]] ; then
+    PATH=$PATH:/usr/kerberos/bin; export PATH
+    klist -s
+    if [[ $? == 1 ]]; then
+        echo "Found Kerberos config, but could not find valid TGT."
+        echo "Try authenticating with kinit."
+        exit 1
+    fi
+fi
+
+# some defaults; try to figure out our domain and which hadoop cluster
+# this host is configured for by default.
+domain=$(facter domain 2>/dev/null)
+cluster=$(hadoop fs -cat /CLUSTERNAME 2> /dev/null | grep ^cluster: | cut -f2 -d' ' || echo 'unknown')
+
+show_help() {
+    cat <<EOF
+
+    Usage: ${0##*/} [-ks] [-?|-h] [-d domainname] [-c clustername] ...
+
+      Used for generating URL for curl
+        -c    clustername (default: $cluster)
+        -d    domainname  (default: $domain)
+
+      Job operations
+        -k    kill any found jobs that are in "Error launching tasks"
+
+      Security
+
+        -s    check for kerberos key first
+
+      Other
+        -v    verbose
+        -?    help
+        -h    help
+EOF
+}
+        
+
+OPTIND=1
+while getopts "ksvc:d:" opt ; do
+    case "$opt" in
+        c)  cluster=$OPTARG
+        ;;
+        d)  domain=$OPTARG
+        ;;
+        k) kill_jobs=1
+        ;;
+        s)  # enable checking for kerberos key
+            security=1
+        ;;
+        v) verbose=1
+        ;;
+        '?'|h) show_help >&2
+            exit 1
+        ;;
+        *)
+        ;;
+    esac
+done
+shift "$((OPTIND-1))" # shift off the options and optional --
+
+#
+if [[ -z $cluster ]] ; then
+    echo "Could not determine the clustername for this host"
+    exit 1
+fi
+
+for i in jobtracker1 jobtracker2 ; do
+    jt=`hadoop mrhaadmin -getServiceState $i 2>/dev/null`
+    case $jt in
+        active) active_jt=$i
+            break
+            ;;
+        *);;
+    esac
+done
+
+job_list=$(hadoop job -list 2>/dev/null | grep job_ | cut -f1)
+
+for job in $job_list ; do
+    url="http://${active_jt}.${cluster}.hdp.${domain}:50030/jobtasks.jsp?jobid=$job&type=map&pagenum=1&state=running"
+
+    if [[ $verbose ]] ; then echo Attempting to query $job at $url; fi
+    curl -s "$url" | grep -q "Error launching task" 
+
+    # save off the pipe status so we can re-use it a few times
+    status=(${PIPESTATUS[@]})
+    curl_status=${status[0]}
+    grep_status=${status[1]}
+
+    if [[ "${curl_status}" -gt 0 ]] ; then
+        echo "Curl failed for status of $job; exit ${PIPESTATUS[0]}"
+        continue
+    fi
+
+    if [[ "${grep_status}" -eq 0 ]] ; then
+        echo "$job: errors launching tasks"
+        if [[ -n "${kill_jobs}" ]] ; then
+            echo "Attempting to kill $job"
+            hadoop job -kill $job
+        fi
+    fi
+done    
+
