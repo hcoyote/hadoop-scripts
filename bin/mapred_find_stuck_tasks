@@ -1,16 +1,4 @@
 #!/bin/bash
-#
-# This script attempts to find stuck MRv1 jobs running in an HA
-# Hadoop cluster using job recovery, looking for jobs with tasks throwing 
-# "Error launching task" errors.
-#
-# Details on this issue can be found at https://issues.cloudera.org/browse/DISTRO-485
-#
-# This script should not be needed if you're running at least
-#
-#  CDH 4.7
-#  CDH 5.0.1
-#  CDH 5.1.0
 
 # Determine if we're kerberos enabled and attempt to find a working
 # ticket before we start using hadoop commands, otherwise this just
@@ -31,6 +19,10 @@ fi
 domain=$(facter domain 2>/dev/null)
 cluster=$(hadoop fs -cat /CLUSTERNAME 2> /dev/null | grep ^cluster: | cut -f2 -d' ' || echo 'unknown')
 
+# script defaults
+sleep=900
+notify_to=root
+
 show_help() {
     cat <<EOF
 
@@ -48,6 +40,8 @@ show_help() {
         -s    check for kerberos key first
 
       Other
+        -t    sleep period between checks: default $sleep
+        -n    send email notification    : default $notify_to
         -v    verbose
         -?    help
         -h    help
@@ -56,7 +50,7 @@ EOF
         
 
 OPTIND=1
-while getopts "ksvc:d:" opt ; do
+while getopts "ksvc:d:n:t:" opt ; do
     case "$opt" in
         c)  cluster=$OPTARG
         ;;
@@ -69,6 +63,8 @@ while getopts "ksvc:d:" opt ; do
         ;;
         v) verbose=1
         ;;
+        t) sleep=$OPTARG
+        ;;
         '?'|h) show_help >&2
             exit 1
         ;;
@@ -78,46 +74,72 @@ while getopts "ksvc:d:" opt ; do
 done
 shift "$((OPTIND-1))" # shift off the options and optional --
 
+klist_test() {
+    klist -s
+    if [[ $? -gt 0 ]] ; then
+        mail -s "$0 kerberos authentication isn't working. ticket expired; k5start dead for $USER?" "$notify_to" < /dev/null > /dev/null 2>&1
+        exit 1
+    fi
+}
+
 #
 if [[ -z $cluster ]] ; then
     echo "Could not determine the clustername for this host"
     exit 1
 fi
 
-for i in jobtracker1 jobtracker2 ; do
-    jt=`hadoop mrhaadmin -getServiceState $i 2>/dev/null`
-    case $jt in
-        active) active_jt=$i
-            break
-            ;;
-        *);;
-    esac
+while : ; do
+
+
+    run_status=$(mktemp /tmp/mapred_find_stuck_tasks.XXXXXXX) || exit 1
+
+    for i in jobtracker1 jobtracker2 ; do
+	klist_test
+
+        jt=`hadoop mrhaadmin -getServiceState $i 2>/dev/null`
+        case $jt in
+            active) active_jt=$i
+                break
+                ;;
+            *);;
+        esac
+    done
+
+    job_list=$(hadoop job -list 2>/dev/null | grep job_ | cut -f1)
+
+    for job in $job_list ; do
+        for type in map reduce ; do
+            url="http://${active_jt}.${cluster}.hdp.${domain}:50030/jobtasks.jsp?jobid=$job&type=$type&pagenum=1&state=running"
+
+            if [[ $verbose ]] ; then echo Attempting to query $job task type $type at $url >> "$run_status"; fi
+            curl -s "$url" | grep -q "Error launching task" 
+
+            # save off the pipe status so we can re-use it a few times
+            status=(${PIPESTATUS[@]})
+            curl_status=${status[0]}
+            grep_status=${status[1]}
+
+            if [[ "${curl_status}" -gt 0 ]] ; then
+                echo "Curl failed for status of $job type $type; exit ${PIPESTATUS[0]}" >> "$run_status"
+                continue
+            fi
+
+            if [[ "${grep_status}" -eq 0 ]] ; then
+                echo "$job: errors launching tasks" >> "$run_status"
+                if [[ -n "${kill_jobs}" ]] ; then
+                    echo "Attempting to kill $job" >> "$run_status"
+                    klist_test
+                    hadoop job -kill $job >> "$run_status" 2>&1
+                fi
+            fi
+        done
+    done    
+
+    if grep -q "errors launching tasks" "$run_status" ; then
+        mail -s "$0 killed tasks" "$notify_to" < "$run_status" > /dev/null 2>&1
+    fi
+
+    find /tmp -maxdepth 1 -name "mapred_find_stuck_tasks.*" -type f -mtime +1 -print0 | xargs --no-run-if-empty -0 rm -f
+
+    sleep $sleep
 done
-
-job_list=$(hadoop job -list 2>/dev/null | grep job_ | cut -f1)
-
-for job in $job_list ; do
-    url="http://${active_jt}.${cluster}.hdp.${domain}:50030/jobtasks.jsp?jobid=$job&type=map&pagenum=1&state=running"
-
-    if [[ $verbose ]] ; then echo Attempting to query $job at $url; fi
-    curl -s "$url" | grep -q "Error launching task" 
-
-    # save off the pipe status so we can re-use it a few times
-    status=(${PIPESTATUS[@]})
-    curl_status=${status[0]}
-    grep_status=${status[1]}
-
-    if [[ "${curl_status}" -gt 0 ]] ; then
-        echo "Curl failed for status of $job; exit ${PIPESTATUS[0]}"
-        continue
-    fi
-
-    if [[ "${grep_status}" -eq 0 ]] ; then
-        echo "$job: errors launching tasks"
-        if [[ -n "${kill_jobs}" ]] ; then
-            echo "Attempting to kill $job"
-            hadoop job -kill $job
-        fi
-    fi
-done    
-
