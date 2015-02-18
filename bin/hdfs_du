@@ -1,0 +1,66 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use IO::File;
+use Getopt::Long;
+
+my $opt_larger_than = 0;
+my $opt_cluster;
+my $opt_debug;
+
+GetOptions(
+        "larger|l=s" => \$opt_larger_than,
+        "cluster|c=s" => \$opt_cluster,
+        "debug|d" => \$opt_debug,
+    );
+
+my @output;
+my $total;
+my @dir = @ARGV;
+my $dirs;
+
+print "@dir\n";
+if (not scalar @dir > 0) {
+    print "Using / as the default path\n";
+    push(@dir,  "/");
+    $dirs = "'/*'";
+} else {
+    $dirs = join(" ", map { m^/tmp^ ? "/tmp" : "'$_/*'" } @dir);
+}
+my $hadoop_cmd = "sudo -u hdfs /usr/bin/hadoop";
+
+if (defined $opt_cluster) {
+    $hadoop_cmd .= " -fs $opt_cluster "
+}
+
+my $hadoop_du  = "$hadoop_cmd fs -du -s ";
+
+
+print "DEBUG: $hadoop_du\n" if $opt_debug;
+
+
+
+my $fh = IO::File->new("$hadoop_du $dirs|") or die "Could not run $hadoop_du $dirs: $!\n";
+
+
+while (my $line = <$fh>) {
+    chomp $line;
+    if ($line =~ /^Found/) {
+        print "$line\n";
+        next;
+    } 
+
+    my ($size, $path) = split(/\s+/, $line);
+
+    if ($size/(1024*1024*1024) > $opt_larger_than) {
+        $total += $size;
+
+        push (@output, sprintf( "%10.2f GBytes %s\n", $size/(1024*1024*1024), $path));
+    }
+
+    
+}
+
+print @output;
+printf "%10s\n%10.2f GBytes Total\n", "-"x40, $total/(1024*1024*1024);
