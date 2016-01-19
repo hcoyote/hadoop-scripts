@@ -3,7 +3,12 @@ hadoop-scripts
 
 A group of scripts useful for managing a hadoop cluster.
 
-bin/hdfs_du
+bin/hdfs_du.py
+
+      Version of hdfs_du using the snakebite HDFS client library from 
+      Spotify.
+
+bin/hdfs_du (deprecated - only here for history)
 
       Simple wrapper around fs -du command to make it more human readable.
 
