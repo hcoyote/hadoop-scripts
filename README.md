@@ -26,6 +26,10 @@ bin/hdfs_tmp_cleaner.pl (deprecated - only here for history)
       timestamps.  It will not recursively descend within subdirectories of
       /tmp.
 
+bin/hdfs_user_dir_creator.py
+
+      Automate the creation of the HDFS /user dir for every account found in
+      the /etc/passwd map or the system's configured posixAccount LDAP server.
 
 bin/mapred_find_stuck_tasks
     
